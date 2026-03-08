@@ -47,9 +47,19 @@ local toggles = {
 	untouchable=false, fpsBoost=false, spectate=false, instantRespawn=false,
 	autoJump=false, loopTP=false,
 	espEnabled=false, espNames=false, espDistance=false, espHealthbar=false,
+	aimbot=false, fovCircle=false, wallCheck=false, teamCheck=false, deadCheck=false,
 }
 
 local espObjects = {}
+
+-- Aimbot settings
+local AimbotSettings = {
+	FOVSize = 150,
+	Smoothing = 0.1,
+	TargetPart = "Head",
+	FOVColor = Color3.fromRGB(255, 255, 255),
+	CurrentTarget = nil,
+}
 
 -- ══════════════════════════════════════
 -- HELPERS
@@ -154,12 +164,8 @@ end
 local function removeESP(p)
 	if espObjects[p] then
 		pcall(function()
-			if espObjects[p].highlight and espObjects[p].highlight.Parent then
-				espObjects[p].highlight:Destroy()
-			end
-			if espObjects[p].billboard and espObjects[p].billboard.Parent then
-				espObjects[p].billboard:Destroy()
-			end
+			if espObjects[p].highlight and espObjects[p].highlight.Parent then espObjects[p].highlight:Destroy() end
+			if espObjects[p].billboard and espObjects[p].billboard.Parent then espObjects[p].billboard:Destroy() end
 		end)
 		espObjects[p] = nil
 	end
@@ -240,7 +246,6 @@ local function buildESP(p)
 		data.hbBG = hbBG
 		data.hbFill = hbFill
 	end
-
 	espObjects[p] = data
 end
 
@@ -294,9 +299,7 @@ Players.PlayerAdded:Connect(function(p)
 		if toggles.espEnabled then buildESP(p) end
 	end)
 end)
-
 Players.PlayerRemoving:Connect(function(p) removeESP(p) end)
-
 for _,p in pairs(Players:GetPlayers()) do
 	if p ~= player then
 		p.CharacterAdded:Connect(function()
@@ -305,6 +308,137 @@ for _,p in pairs(Players:GetPlayers()) do
 		end)
 	end
 end
+
+-- ══════════════════════════════════════
+-- AIMBOT FOV CIRCLE
+-- ══════════════════════════════════════
+local AimSG = Instance.new("ScreenGui")
+AimSG.Name = "BoloverAim"
+AimSG.ResetOnSpawn = false
+AimSG.IgnoreGuiInset = true
+AimSG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+AimSG.DisplayOrder = 998
+AimSG.Parent = player.PlayerGui
+
+local FOVFrame = Instance.new("Frame", AimSG)
+FOVFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+FOVFrame.BackgroundTransparency = 1
+FOVFrame.BorderSizePixel = 0
+FOVFrame.Visible = false
+
+local FOVStroke = Instance.new("UIStroke", FOVFrame)
+FOVStroke.Thickness = 1.5
+FOVStroke.Color = AimbotSettings.FOVColor
+
+local FOVCorner = Instance.new("UICorner", FOVFrame)
+FOVCorner.CornerRadius = UDim.new(1, 0)
+
+-- Rainbow FOV animation
+local rainbowHue = 0
+local isRainbow = false
+
+RunService.RenderStepped:Connect(function()
+	local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+	FOVFrame.Size = UDim2.new(0, AimbotSettings.FOVSize*2, 0, AimbotSettings.FOVSize*2)
+	FOVFrame.Position = UDim2.new(0, center.X, 0, center.Y)
+	FOVFrame.Visible = toggles.fovCircle
+
+	if isRainbow then
+		rainbowHue = (rainbowHue + 0.005) % 1
+		local col = Color3.fromHSV(rainbowHue, 1, 1)
+		FOVStroke.Color = col
+		AimbotSettings.FOVColor = col
+	else
+		FOVStroke.Color = AimbotSettings.FOVColor
+	end
+end)
+
+-- ══════════════════════════════════════
+-- AIMBOT LOGIC
+-- ══════════════════════════════════════
+local function isAimbotValid(p)
+	if not p or not p.Character then return false end
+	local hum = getHum(p.Character)
+	if toggles.deadCheck and hum and hum.Health <= 0 then return false end
+	if toggles.teamCheck and player.Team and p.Team == player.Team then return false end
+	if toggles.wallCheck then
+		local hrp = getHRP(p.Character)
+		local target = p.Character:FindFirstChild(AimbotSettings.TargetPart)
+		if hrp and target then
+			local params = RaycastParams.new()
+			params.FilterDescendantsInstances = {player.Character, camera}
+			params.FilterType = Enum.RaycastFilterType.Exclude
+			local result = workspace:Raycast(
+				camera.CFrame.Position,
+				target.Position - camera.CFrame.Position,
+				params
+			)
+			if result and not result.Instance:IsDescendantOf(p.Character) then return false end
+		end
+	end
+	return true
+end
+
+local function getAimbotTarget()
+	local closest = nil
+	local closestDist = AimbotSettings.FOVSize
+	local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+
+	for _,p in pairs(Players:GetPlayers()) do
+		if p ~= player and isAimbotValid(p) then
+			local part = p.Character and p.Character:FindFirstChild(AimbotSettings.TargetPart)
+			if part then
+				local screenPos, onScreen = camera:WorldToViewportPoint(part.Position)
+				if onScreen then
+					local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+					if dist < closestDist then
+						closestDist = dist
+						closest = p
+					end
+				end
+			end
+		end
+	end
+	return closest
+end
+
+RunService.RenderStepped:Connect(function()
+	if not toggles.aimbot then
+		AimbotSettings.CurrentTarget = nil
+		return
+	end
+
+	local target = AimbotSettings.CurrentTarget
+	if target then
+		local part = target.Character and target.Character:FindFirstChild(AimbotSettings.TargetPart)
+		if not part or not isAimbotValid(target) then
+			AimbotSettings.CurrentTarget = nil
+			target = nil
+		end
+	end
+
+	if not target then
+		AimbotSettings.CurrentTarget = getAimbotTarget()
+		target = AimbotSettings.CurrentTarget
+	end
+
+	if target then
+		local part = target.Character and target.Character:FindFirstChild(AimbotSettings.TargetPart)
+		if part then
+			local screenPos, onScreen = camera:WorldToViewportPoint(part.Position)
+			local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+			local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+			if not onScreen or dist > AimbotSettings.FOVSize * 1.5 then
+				AimbotSettings.CurrentTarget = nil
+				return
+			end
+			camera.CFrame = camera.CFrame:Lerp(
+				CFrame.new(camera.CFrame.Position, part.Position),
+				math.clamp(AimbotSettings.Smoothing, 0.01, 1)
+			)
+		end
+	end
+end)
 
 -- ══════════════════════════════════════
 -- WINDOW
@@ -319,15 +453,27 @@ local Window = Rayfield:CreateWindow({
 	KeySystem = false,
 })
 
-task.spawn(function()
-	task.wait(1.5)
+-- Transparency (aggressive pass on all frames)
+local function applyTransparency()
 	local rf = player.PlayerGui:FindFirstChild("Rayfield")
 	if not rf then return end
 	for _,obj in ipairs(rf:GetDescendants()) do
-		if (obj:IsA("Frame") or obj:IsA("ScrollingFrame") or obj:IsA("CanvasGroup")) and obj.BackgroundTransparency < 0.8 then
-			obj.BackgroundTransparency = 0.8
+		if obj:IsA("Frame") or obj:IsA("ScrollingFrame") then
+			if obj.BackgroundTransparency < 0.75 then
+				obj.BackgroundTransparency = 0.75
+			end
+		elseif obj:IsA("CanvasGroup") then
+			obj.GroupTransparency = 0.75
 		end
 	end
+end
+
+task.spawn(function()
+	task.wait(1.5)
+	applyTransparency()
+	-- Second pass after animations settle
+	task.wait(1)
+	applyTransparency()
 end)
 
 -- ══════════════════════════════════════
@@ -336,6 +482,7 @@ end)
 local MainTab     = Window:CreateTab("Main",     "zap")
 local CombatTab   = Window:CreateTab("Combat",   "sword")
 local TargetTab   = Window:CreateTab("Target",   "crosshair")
+local AimbotTab   = Window:CreateTab("Aimbot",   "target")
 local ESPTab      = Window:CreateTab("ESP",      "eye")
 local VisualsTab  = Window:CreateTab("Visuals",  "sun")
 local ItemTab     = Window:CreateTab("Items",    "package")
@@ -346,312 +493,234 @@ local SettingsTab = Window:CreateTab("Settings", "settings")
 -- MAIN
 -- ══════════════════════════════════════
 MainTab:CreateSection("Movement")
-MainTab:CreateSlider({
-	Name="Walkspeed", Range={16,500}, Increment=1, Suffix="ws", CurrentValue=16,
-	Callback=function(V) customSpeed=V end
-})
-MainTab:CreateToggle({
-	Name="Enable Walkspeed", CurrentValue=false,
-	Callback=function(V) toggles.speed=V end
-})
-MainTab:CreateSlider({
-	Name="Jump Power", Range={50,500}, Increment=1, Suffix="jp", CurrentValue=50,
-	Callback=function(V) customJump=V end
-})
-MainTab:CreateToggle({
-	Name="Enable Jump Power", CurrentValue=false,
-	Callback=function(V)
-		toggles.jumpHigh=V
-		if not V then local h=getHum(player.Character) if h then h.JumpPower=50 end end
-	end
-})
-MainTab:CreateToggle({
-	Name="Infinite Jump", CurrentValue=false,
-	Callback=function(V) toggles.infjump=V end
-})
-MainTab:CreateToggle({
-	Name="Noclip", CurrentValue=false,
-	Callback=function(V)
-		toggles.noclip=V
-		if not V and player.Character then
-			for _,v in pairs(player.Character:GetDescendants()) do
-				if v:IsA("BasePart") then v.CanCollide=true end
-			end
-		end
-	end
-})
-MainTab:CreateToggle({
-	Name="Spinbot", CurrentValue=false,
-	Callback=function(V) toggles.spinbot=V end
-})
-MainTab:CreateToggle({
-	Name="Auto Jump", CurrentValue=false,
-	Callback=function(V)
-		toggles.autoJump=V
-		local hum=getHum(player.Character)
-		if hum then hum.AutoJumpEnabled=V end
-	end
-})
+MainTab:CreateSlider({ Name="Walkspeed", Range={16,500}, Increment=1, Suffix="ws", CurrentValue=16, Callback=function(V) customSpeed=V end })
+MainTab:CreateToggle({ Name="Enable Walkspeed", CurrentValue=false, Callback=function(V) toggles.speed=V end })
+MainTab:CreateSlider({ Name="Jump Power", Range={50,500}, Increment=1, Suffix="jp", CurrentValue=50, Callback=function(V) customJump=V end })
+MainTab:CreateToggle({ Name="Enable Jump Power", CurrentValue=false, Callback=function(V) toggles.jumpHigh=V if not V then local h=getHum(player.Character) if h then h.JumpPower=50 end end end })
+MainTab:CreateToggle({ Name="Infinite Jump", CurrentValue=false, Callback=function(V) toggles.infjump=V end })
+MainTab:CreateToggle({ Name="Noclip", CurrentValue=false, Callback=function(V) toggles.noclip=V if not V and player.Character then for _,v in pairs(player.Character:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide=true end end end end })
+MainTab:CreateToggle({ Name="Spinbot", CurrentValue=false, Callback=function(V) toggles.spinbot=V end })
+MainTab:CreateToggle({ Name="Auto Jump", CurrentValue=false, Callback=function(V) toggles.autoJump=V local hum=getHum(player.Character) if hum then hum.AutoJumpEnabled=V end end })
 MainTab:CreateSection("Player")
-MainTab:CreateToggle({
-	Name="God Mode", CurrentValue=false,
-	Callback=function(V) toggles.untouchable=V end
-})
-MainTab:CreateToggle({
-	Name="FPS Booster", CurrentValue=false,
-	Callback=function(V)
-		toggles.fpsBoost=V
-		if V then
-			for _,v in pairs(workspace:GetDescendants()) do
-				if v:IsA("BasePart") then fpsStoredMaterials[v]=v.Material; v.Material=Enum.Material.SmoothPlastic end
-			end
-		else
-			for p,m in pairs(fpsStoredMaterials) do if p and p.Parent then p.Material=m end end
-			fpsStoredMaterials={}
-		end
-	end
-})
-MainTab:CreateToggle({
-	Name="Instant Respawn", CurrentValue=false,
-	Callback=function(V) toggles.instantRespawn=V end
-})
+MainTab:CreateToggle({ Name="God Mode", CurrentValue=false, Callback=function(V) toggles.untouchable=V end })
+MainTab:CreateToggle({ Name="FPS Booster", CurrentValue=false, Callback=function(V)
+	toggles.fpsBoost=V
+	if V then for _,v in pairs(workspace:GetDescendants()) do if v:IsA("BasePart") then fpsStoredMaterials[v]=v.Material; v.Material=Enum.Material.SmoothPlastic end end
+	else for p,m in pairs(fpsStoredMaterials) do if p and p.Parent then p.Material=m end end; fpsStoredMaterials={} end
+end })
+MainTab:CreateToggle({ Name="Instant Respawn", CurrentValue=false, Callback=function(V) toggles.instantRespawn=V end })
 
 -- ══════════════════════════════════════
 -- COMBAT
 -- ══════════════════════════════════════
 CombatTab:CreateSection("Hitbox")
-CombatTab:CreateToggle({
-	Name="Hitbox Expander", CurrentValue=false,
-	Callback=function(V) toggles.hitbox=V end
-})
-CombatTab:CreateSlider({
-	Name="Hitbox Size", Range={2,100}, Increment=1, CurrentValue=15,
-	Callback=function(V) hitboxSize=V end
-})
+CombatTab:CreateToggle({ Name="Hitbox Expander", CurrentValue=false, Callback=function(V) toggles.hitbox=V end })
+CombatTab:CreateSlider({ Name="Hitbox Size", Range={2,100}, Increment=1, CurrentValue=15, Callback=function(V) hitboxSize=V end })
 CombatTab:CreateSection("Players")
-CombatTab:CreateToggle({
-	Name="Freeze All", CurrentValue=false,
-	Callback=function(V) toggles.frozeAll=V end
-})
-CombatTab:CreateToggle({
-	Name="Freeze Aura (35 studs)", CurrentValue=false,
-	Callback=function(V) toggles.freezeAura=V end
-})
-CombatTab:CreateToggle({
-	Name="Bring All", CurrentValue=false,
-	Callback=function(V) toggles.bringAll=V end
-})
-CombatTab:CreateToggle({
-	Name="Bring Nearby (70 studs)", CurrentValue=false,
-	Callback=function(V) toggles.bringNearby=V end
-})
+CombatTab:CreateToggle({ Name="Freeze All", CurrentValue=false, Callback=function(V) toggles.frozeAll=V end })
+CombatTab:CreateToggle({ Name="Freeze Aura (35 studs)", CurrentValue=false, Callback=function(V) toggles.freezeAura=V end })
+CombatTab:CreateToggle({ Name="Bring All", CurrentValue=false, Callback=function(V) toggles.bringAll=V end })
+CombatTab:CreateToggle({ Name="Bring Nearby (70 studs)", CurrentValue=false, Callback=function(V) toggles.bringNearby=V end })
 
 -- ══════════════════════════════════════
 -- TARGET
 -- ══════════════════════════════════════
 TargetTab:CreateSection("Target")
-TargetTab:CreateInput({
-	Name="Player Name", PlaceholderText="Enter username...", RemoveTextAfterFocusLost=false,
-	Callback=function(T) targetPlayerName=T end
-})
-TargetTab:CreateToggle({
-	Name="Spectate", CurrentValue=false,
-	Callback=function(V)
-		toggles.spectate=V
-		if V then task.spawn(function()
-			while toggles.spectate do
-				local t=GetPlayer(targetPlayerName)
-				if t and t.Character and getHum(t.Character) then
-					workspace.CurrentCamera.CameraSubject=t.Character.Humanoid
-				elseif player.Character then
-					workspace.CurrentCamera.CameraSubject=player.Character:FindFirstChild("Humanoid")
-				end
-				task.wait(0.1)
-			end
-		end)
-		elseif player.Character then
-			workspace.CurrentCamera.CameraSubject=player.Character:FindFirstChild("Humanoid")
-		end
-	end
-})
-TargetTab:CreateToggle({
-	Name="Bring Target", CurrentValue=false,
-	Callback=function(V)
-		toggles.bringTarget=V
-		if V then
+TargetTab:CreateInput({ Name="Player Name", PlaceholderText="Enter username...", RemoveTextAfterFocusLost=false, Callback=function(T) targetPlayerName=T end })
+TargetTab:CreateToggle({ Name="Spectate", CurrentValue=false, Callback=function(V)
+	toggles.spectate=V
+	if V then task.spawn(function()
+		while toggles.spectate do
 			local t=GetPlayer(targetPlayerName)
-			if t and t.Character and getHRP(t.Character) then
-				persistentTarget=t; targetOrigPos=getHRP(t.Character).CFrame
-			end
+			if t and t.Character and getHum(t.Character) then workspace.CurrentCamera.CameraSubject=t.Character.Humanoid
+			elseif player.Character then workspace.CurrentCamera.CameraSubject=player.Character:FindFirstChild("Humanoid") end
+			task.wait(0.1)
+		end
+	end)
+	elseif player.Character then workspace.CurrentCamera.CameraSubject=player.Character:FindFirstChild("Humanoid") end
+end })
+TargetTab:CreateToggle({ Name="Bring Target", CurrentValue=false, Callback=function(V)
+	toggles.bringTarget=V
+	if V then local t=GetPlayer(targetPlayerName) if t and t.Character and getHRP(t.Character) then persistentTarget=t; targetOrigPos=getHRP(t.Character).CFrame end
+	else if persistentTarget and persistentTarget.Character and getHRP(persistentTarget.Character) and targetOrigPos then getHRP(persistentTarget.Character).CFrame=targetOrigPos end; persistentTarget=nil; targetOrigPos=nil end
+end })
+TargetTab:CreateToggle({ Name="Freeze Target", CurrentValue=false, Callback=function(V)
+	toggles.freezeTarget=V; local t=GetPlayer(targetPlayerName)
+	if t and t.Character and getHRP(t.Character) then getHRP(t.Character).Anchored=V end
+end })
+TargetTab:CreateToggle({ Name="Loop Teleport to Target", CurrentValue=false, Callback=function(V)
+	toggles.loopTP=V
+	if V then task.spawn(function()
+		while toggles.loopTP do
+			local t=GetPlayer(targetPlayerName); local hrp=getHRP(player.Character)
+			if t and t.Character and getHRP(t.Character) and hrp then hrp.CFrame=getHRP(t.Character).CFrame*CFrame.new(0,0,3) end
+			task.wait(0.1)
+		end
+	end) end
+end })
+TargetTab:CreateButton({ Name="Fling Target", Callback=function()
+	local t=GetPlayer(targetPlayerName) if t and t.Character then local th=getHRP(t.Character) if th then
+		local bv=Instance.new("BodyVelocity",th); bv.MaxForce=Vector3.new(1e9,1e9,1e9)
+		bv.Velocity=Vector3.new(math.random(-1,1)*500,800,math.random(-1,1)*500)
+		game:GetService("Debris"):AddItem(bv,0.1)
+	end end
+end })
+
+-- ══════════════════════════════════════
+-- AIMBOT TAB
+-- ══════════════════════════════════════
+AimbotTab:CreateSection("Aimbot")
+AimbotTab:CreateToggle({
+	Name = "Enable Aimbot",
+	CurrentValue = false,
+	Callback = function(V)
+		toggles.aimbot = V
+		if not V then AimbotSettings.CurrentTarget = nil end
+	end
+})
+AimbotTab:CreateSection("FOV Circle")
+AimbotTab:CreateToggle({
+	Name = "Enable FOV Circle",
+	CurrentValue = false,
+	Callback = function(V) toggles.fovCircle = V end
+})
+AimbotTab:CreateInput({
+	Name = "FOV Circle Size",
+	PlaceholderText = "Default: 150",
+	RemoveTextAfterFocusLost = false,
+	Callback = function(V)
+		local num = tonumber(V)
+		if num then AimbotSettings.FOVSize = math.clamp(num, 10, 800) end
+	end
+})
+AimbotTab:CreateSection("FOV Color")
+AimbotTab:CreateDropdown({
+	Name = "FOV Circle Color",
+	Options = {"White","Red","Orange","Yellow","Lime","Cyan","Blue","Purple","Pink","Hot Pink","Rainbow"},
+	CurrentOption = {"White"},
+	MultipleOptions = false,
+	Callback = function(V)
+		isRainbow = false
+		local colors = {
+			["White"]    = Color3.fromRGB(255,255,255),
+			["Red"]      = Color3.fromRGB(255,50,50),
+			["Orange"]   = Color3.fromRGB(255,165,0),
+			["Yellow"]   = Color3.fromRGB(255,230,0),
+			["Lime"]     = Color3.fromRGB(80,255,80),
+			["Cyan"]     = Color3.fromRGB(0,220,255),
+			["Blue"]     = Color3.fromRGB(0,100,255),
+			["Purple"]   = Color3.fromRGB(160,0,255),
+			["Pink"]     = Color3.fromRGB(255,100,200),
+			["Hot Pink"] = Color3.fromRGB(255,20,147),
+			["Rainbow"]  = nil,
+		}
+		if V == "Rainbow" then
+			isRainbow = true
 		else
-			if persistentTarget and persistentTarget.Character and getHRP(persistentTarget.Character) and targetOrigPos then
-				getHRP(persistentTarget.Character).CFrame=targetOrigPos
-			end
-			persistentTarget=nil; targetOrigPos=nil
-		end
-	end
-})
-TargetTab:CreateToggle({
-	Name="Freeze Target", CurrentValue=false,
-	Callback=function(V)
-		toggles.freezeTarget=V
-		local t=GetPlayer(targetPlayerName)
-		if t and t.Character and getHRP(t.Character) then getHRP(t.Character).Anchored=V end
-	end
-})
-TargetTab:CreateToggle({
-	Name="Loop Teleport to Target", CurrentValue=false,
-	Callback=function(V)
-		toggles.loopTP=V
-		if V then task.spawn(function()
-			while toggles.loopTP do
-				local t=GetPlayer(targetPlayerName)
-				local hrp=getHRP(player.Character)
-				if t and t.Character and getHRP(t.Character) and hrp then
-					hrp.CFrame=getHRP(t.Character).CFrame*CFrame.new(0,0,3)
-				end
-				task.wait(0.1)
-			end
-		end) end
-	end
-})
-TargetTab:CreateButton({
-	Name="Fling Target",
-	Callback=function()
-		local t=GetPlayer(targetPlayerName)
-		if t and t.Character then
-			local th=getHRP(t.Character)
-			if th then
-				local bv=Instance.new("BodyVelocity",th)
-				bv.MaxForce=Vector3.new(1e9,1e9,1e9)
-				bv.Velocity=Vector3.new(math.random(-1,1)*500,800,math.random(-1,1)*500)
-				game:GetService("Debris"):AddItem(bv,0.1)
+			local col = colors[V]
+			if col then
+				AimbotSettings.FOVColor = col
+				FOVStroke.Color = col
 			end
 		end
+	end
+})
+AimbotTab:CreateSection("Checks")
+AimbotTab:CreateToggle({
+	Name = "Wall Check",
+	CurrentValue = false,
+	Callback = function(V) toggles.wallCheck = V end
+})
+AimbotTab:CreateToggle({
+	Name = "Team Check",
+	CurrentValue = false,
+	Callback = function(V) toggles.teamCheck = V end
+})
+AimbotTab:CreateToggle({
+	Name = "Dead Check",
+	CurrentValue = false,
+	Callback = function(V) toggles.deadCheck = V end
+})
+AimbotTab:CreateSection("Smoothing")
+AimbotTab:CreateSlider({
+	Name = "Aim Smoothing",
+	Range = {1, 100},
+	Increment = 1,
+	Suffix = "%",
+	CurrentValue = 10,
+	Callback = function(V)
+		AimbotSettings.Smoothing = V / 100
 	end
 })
 
 -- ══════════════════════════════════════
--- ESP
+-- ESP TAB
 -- ══════════════════════════════════════
 ESPTab:CreateSection("ESP")
-ESPTab:CreateToggle({
-	Name="ESP On/Off", CurrentValue=false,
-	Callback=function(V)
-		toggles.espEnabled=V
-		if V then refreshAllESP() else for p,_ in pairs(espObjects) do removeESP(p) end end
-		updateESPToggles()
-	end
-})
-ESPTab:CreateToggle({
-	Name="Name ESP", CurrentValue=false,
-	Callback=function(V) toggles.espNames=V; updateESPToggles() end
-})
-ESPTab:CreateToggle({
-	Name="Distance ESP", CurrentValue=false,
-	Callback=function(V) toggles.espDistance=V; updateESPToggles() end
-})
-ESPTab:CreateToggle({
-	Name="Healthbar ESP", CurrentValue=false,
-	Callback=function(V) toggles.espHealthbar=V; updateESPToggles() end
-})
+ESPTab:CreateToggle({ Name="ESP On/Off", CurrentValue=false, Callback=function(V)
+	toggles.espEnabled=V
+	if V then refreshAllESP() else for p,_ in pairs(espObjects) do removeESP(p) end end
+	updateESPToggles()
+end })
+ESPTab:CreateToggle({ Name="Name ESP", CurrentValue=false, Callback=function(V) toggles.espNames=V; updateESPToggles() end })
+ESPTab:CreateToggle({ Name="Distance ESP", CurrentValue=false, Callback=function(V) toggles.espDistance=V; updateESPToggles() end })
+ESPTab:CreateToggle({ Name="Healthbar ESP", CurrentValue=false, Callback=function(V) toggles.espHealthbar=V; updateESPToggles() end })
 
 -- ══════════════════════════════════════
 -- VISUALS
 -- ══════════════════════════════════════
 VisualsTab:CreateSection("World")
-VisualsTab:CreateToggle({
-	Name="Xray Vision", CurrentValue=false,
-	Callback=function(V)
-		toggles.xray=V
-		for _,v in pairs(workspace:GetDescendants()) do
-			if v:IsA("BasePart") and not v:IsDescendantOf(player.Character) then
-				if V then
-					if not xrayParts[v] then xrayParts[v]=v.Transparency end
-					v.Transparency=0.6
-				else
-					if xrayParts[v]~=nil then v.Transparency=xrayParts[v]; xrayParts[v]=nil end
-				end
-			end
+VisualsTab:CreateToggle({ Name="Xray Vision", CurrentValue=false, Callback=function(V)
+	toggles.xray=V
+	for _,v in pairs(workspace:GetDescendants()) do
+		if v:IsA("BasePart") and not v:IsDescendantOf(player.Character) then
+			if V then if not xrayParts[v] then xrayParts[v]=v.Transparency end; v.Transparency=0.6
+			else if xrayParts[v]~=nil then v.Transparency=xrayParts[v]; xrayParts[v]=nil end end
 		end
 	end
-})
-VisualsTab:CreateToggle({
-	Name="Fullbright", CurrentValue=false,
-	Callback=function(V)
-		if V then Lighting.Brightness=2; Lighting.ClockTime=12; Lighting.GlobalShadows=false; Lighting.Ambient=Color3.new(1,1,1)
-		else Lighting.Brightness=origLight.Brightness; Lighting.ClockTime=origLight.ClockTime; Lighting.GlobalShadows=origLight.GlobalShadows; Lighting.Ambient=origLight.Ambient end
-	end
-})
-VisualsTab:CreateToggle({
-	Name="Night Mode", CurrentValue=false,
-	Callback=function(V)
-		if V then Lighting.ClockTime=0; Lighting.Brightness=0.2
-		else Lighting.ClockTime=origLight.ClockTime; Lighting.Brightness=origLight.Brightness end
-	end
-})
-VisualsTab:CreateToggle({
-	Name="No Fog", CurrentValue=false,
-	Callback=function(V) Lighting.FogEnd = V and 1e6 or origLight.FogEnd end
-})
+end })
+VisualsTab:CreateToggle({ Name="Fullbright", CurrentValue=false, Callback=function(V)
+	if V then Lighting.Brightness=2; Lighting.ClockTime=12; Lighting.GlobalShadows=false; Lighting.Ambient=Color3.new(1,1,1)
+	else Lighting.Brightness=origLight.Brightness; Lighting.ClockTime=origLight.ClockTime; Lighting.GlobalShadows=origLight.GlobalShadows; Lighting.Ambient=origLight.Ambient end
+end })
+VisualsTab:CreateToggle({ Name="Night Mode", CurrentValue=false, Callback=function(V)
+	if V then Lighting.ClockTime=0; Lighting.Brightness=0.2
+	else Lighting.ClockTime=origLight.ClockTime; Lighting.Brightness=origLight.Brightness end
+end })
+VisualsTab:CreateToggle({ Name="No Fog", CurrentValue=false, Callback=function(V)
+	Lighting.FogEnd = V and 1e6 or origLight.FogEnd
+end })
 
 -- ══════════════════════════════════════
 -- ITEMS
 -- ══════════════════════════════════════
 ItemTab:CreateSection("Tools")
-ItemTab:CreateToggle({
-	Name="TP Tool", CurrentValue=false,
-	Callback=function(V)
-		toggles.tptool=V
-		if V then
-			tpTool=Instance.new("Tool"); tpTool.Name="Click TP"; tpTool.RequiresHandle=false
-			tpTool.Parent=player.Backpack
-			tpTool.Activated:Connect(function()
-				local hrp=getHRP(player.Character)
-				if hrp then hrp.CFrame=mouse.Hit*CFrame.new(0,3,0) end
-			end)
-		else if tpTool then tpTool:Destroy(); tpTool=nil end end
-	end
-})
-ItemTab:CreateToggle({
-	Name="Glide Tool", CurrentValue=false,
-	Callback=function(V)
-		toggles.glidetool=V
-		if V then glideTool=createGlideTool(); glideTool.Parent=player.Backpack
-		else if glideTool then glideTool:Destroy(); glideTool=nil end end
-	end
-})
+ItemTab:CreateToggle({ Name="TP Tool", CurrentValue=false, Callback=function(V)
+	toggles.tptool=V
+	if V then tpTool=Instance.new("Tool"); tpTool.Name="Click TP"; tpTool.RequiresHandle=false; tpTool.Parent=player.Backpack
+		tpTool.Activated:Connect(function() local hrp=getHRP(player.Character) if hrp then hrp.CFrame=mouse.Hit*CFrame.new(0,3,0) end end)
+	else if tpTool then tpTool:Destroy(); tpTool=nil end end
+end })
+ItemTab:CreateToggle({ Name="Glide Tool", CurrentValue=false, Callback=function(V)
+	toggles.glidetool=V
+	if V then glideTool=createGlideTool(); glideTool.Parent=player.Backpack
+	else if glideTool then glideTool:Destroy(); glideTool=nil end end
+end })
 
 -- ══════════════════════════════════════
 -- UTILITY
 -- ══════════════════════════════════════
 UtilityTab:CreateSection("Hiding")
-UtilityTab:CreateToggle({
-	Name="Hide Room", CurrentValue=false,
-	Callback=function(V)
-		toggles.hide=V
-		local hrp=getHRP(player.Character); if not hrp then return end
-		if V then preCloudPos=hrp.CFrame; hrp.CFrame=spawnRoom()*CFrame.new(0,5,0)
-		else if roomFolder then roomFolder:Destroy(); roomFolder=nil end; if preCloudPos then hrp.CFrame=preCloudPos end end
-	end
-})
-UtilityTab:CreateToggle({
-	Name="Auto Hide (< 30% HP)", CurrentValue=false,
-	Callback=function(V) toggles.autoHide=V end
-})
+UtilityTab:CreateToggle({ Name="Hide Room", CurrentValue=false, Callback=function(V)
+	toggles.hide=V; local hrp=getHRP(player.Character); if not hrp then return end
+	if V then preCloudPos=hrp.CFrame; hrp.CFrame=spawnRoom()*CFrame.new(0,5,0)
+	else if roomFolder then roomFolder:Destroy(); roomFolder=nil end; if preCloudPos then hrp.CFrame=preCloudPos end end
+end })
+UtilityTab:CreateToggle({ Name="Auto Hide (< 30% HP)", CurrentValue=false, Callback=function(V) toggles.autoHide=V end })
 UtilityTab:CreateSection("Teleport")
-UtilityTab:CreateToggle({
-	Name="Instant Interact", CurrentValue=false,
-	Callback=function(V) toggles.instantInteract=V end
-})
-UtilityTab:CreateButton({
-	Name="Save Position",
-	Callback=function() local hrp=getHRP(player.Character); if hrp then savedLocation=hrp.CFrame end end
-})
-UtilityTab:CreateButton({
-	Name="Teleport to Saved",
-	Callback=function() if savedLocation then local hrp=getHRP(player.Character); if hrp then hrp.CFrame=savedLocation end end end
-})
+UtilityTab:CreateToggle({ Name="Instant Interact", CurrentValue=false, Callback=function(V) toggles.instantInteract=V end })
+UtilityTab:CreateButton({ Name="Save Position", Callback=function() local hrp=getHRP(player.Character) if hrp then savedLocation=hrp.CFrame end end })
+UtilityTab:CreateButton({ Name="Teleport to Saved", Callback=function() if savedLocation then local hrp=getHRP(player.Character) if hrp then hrp.CFrame=savedLocation end end end })
 
 -- ══════════════════════════════════════
 -- SETTINGS
@@ -677,30 +746,19 @@ RunService.Heartbeat:Connect(function()
 		hrp.Velocity=Vector3.new(hum.MoveDirection.X*customSpeed, hrp.Velocity.Y, hum.MoveDirection.Z*customSpeed)
 	end
 	if toggles.jumpHigh then hum.JumpPower=customJump end
-	if toggles.spinbot then
-		spinAngle=(spinAngle+4)%360
-		hrp.CFrame=CFrame.new(hrp.Position)*CFrame.Angles(0,math.rad(spinAngle),0)
-	end
+	if toggles.spinbot then spinAngle=(spinAngle+4)%360; hrp.CFrame=CFrame.new(hrp.Position)*CFrame.Angles(0,math.rad(spinAngle),0) end
 	if toggles.antisit then hum.Sit=false end
 	if toggles.antistun then hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,false) end
 	if toggles.antifling then hrp.RotVelocity=Vector3.new(0,0,0) end
-	if toggles.untouchable then
-		for _,v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanTouch=false end end
-	else
-		for _,v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanTouch=true end end
-	end
+	if toggles.untouchable then for _,v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanTouch=false end end
+	else for _,v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanTouch=true end end end
 	if toggles.bringTarget and persistentTarget and persistentTarget.Character then
-		local th=getHRP(persistentTarget.Character)
-		if th then th.CFrame=hrp.CFrame*CFrame.new(0,0,-3) end
+		local th=getHRP(persistentTarget.Character); if th then th.CFrame=hrp.CFrame*CFrame.new(0,0,-3) end
 	end
 	if toggles.autoHide then
 		local hp=(hum.Health/math.max(hum.MaxHealth,1))*100
-		if hp<30 and not toggles.hide then
-			autoHideReturnPos=hrp.CFrame; hrp.CFrame=spawnRoom()*CFrame.new(0,5,0); toggles.hide=true
-		elseif hp>=50 and toggles.hide and autoHideReturnPos then
-			hrp.CFrame=autoHideReturnPos; autoHideReturnPos=nil; toggles.hide=false
-			if roomFolder then roomFolder:Destroy(); roomFolder=nil end
-		end
+		if hp<30 and not toggles.hide then autoHideReturnPos=hrp.CFrame; hrp.CFrame=spawnRoom()*CFrame.new(0,5,0); toggles.hide=true
+		elseif hp>=50 and toggles.hide and autoHideReturnPos then hrp.CFrame=autoHideReturnPos; autoHideReturnPos=nil; toggles.hide=false; if roomFolder then roomFolder:Destroy(); roomFolder=nil end end
 	end
 	for _,p in pairs(Players:GetPlayers()) do
 		if p~=player and p.Character then
@@ -711,12 +769,9 @@ RunService.Heartbeat:Connect(function()
 				local freeze=toggles.frozeAll or (toggles.freezeAura and dist<35)
 				if bring or freeze then
 					if not playerPositions[p.UserId] then playerPositions[p.UserId]=ph.CFrame end
-					ph.Anchored=true
-					if bring then ph.CFrame=hrp.CFrame*CFrame.new(0,0,-5) end
+					ph.Anchored=true; if bring then ph.CFrame=hrp.CFrame*CFrame.new(0,0,-5) end
 				else
-					if playerPositions[p.UserId] then
-						ph.Anchored=false; ph.CFrame=playerPositions[p.UserId]; playerPositions[p.UserId]=nil
-					end
+					if playerPositions[p.UserId] then ph.Anchored=false; ph.CFrame=playerPositions[p.UserId]; playerPositions[p.UserId]=nil end
 				end
 				if toggles.hitbox then ph.Size=Vector3.new(hitboxSize,hitboxSize,hitboxSize); ph.Transparency=0.6
 				else ph.Size=Vector3.new(2,2,1); ph.Transparency=0 end
@@ -738,9 +793,7 @@ end)
 
 RunService.Stepped:Connect(function()
 	if toggles.noclip and player.Character then
-		for _,v in pairs(player.Character:GetDescendants()) do
-			if v:IsA("BasePart") then v.CanCollide=false end
-		end
+		for _,v in pairs(player.Character:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide=false end end
 	end
 end)
 
