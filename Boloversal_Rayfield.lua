@@ -52,14 +52,16 @@ local toggles = {
 
 local espObjects = {}
 
--- Aimbot settings
 local AimbotSettings = {
 	FOVSize = 150,
 	Smoothing = 0.1,
-	TargetPart = "Head",
+	TargetPart = "HumanoidRootPart",
 	FOVColor = Color3.fromRGB(255, 255, 255),
 	CurrentTarget = nil,
 }
+
+local isRainbow = false
+local rainbowHue = 0
 
 -- ══════════════════════════════════════
 -- HELPERS
@@ -141,11 +143,9 @@ local function createGlideTool()
 			end
 		end)
 		local bv = Instance.new("BodyVelocity", hrp)
-		bv.MaxForce=Vector3.new(1e6,1e6,1e6)
-		bv.Velocity=(target-hrp.Position).Unit*120
+		bv.MaxForce=Vector3.new(1e6,1e6,1e6); bv.Velocity=(target-hrp.Position).Unit*120
 		local bg = Instance.new("BodyGyro", hrp)
-		bg.MaxTorque=Vector3.new(1e6,1e6,1e6)
-		bg.CFrame=CFrame.new(hrp.Position, target)
+		bg.MaxTorque=Vector3.new(1e6,1e6,1e6); bg.CFrame=CFrame.new(hrp.Position, target)
 		task.wait((target-hrp.Position).Magnitude/120)
 		nc:Disconnect(); bv:Destroy(); bg:Destroy()
 		tr.Enabled=false; gliding=false
@@ -310,7 +310,7 @@ for _,p in pairs(Players:GetPlayers()) do
 end
 
 -- ══════════════════════════════════════
--- AIMBOT FOV CIRCLE
+-- FOV CIRCLE (standalone ScreenGui)
 -- ══════════════════════════════════════
 local AimSG = Instance.new("ScreenGui")
 AimSG.Name = "BoloverAim"
@@ -333,25 +333,19 @@ FOVStroke.Color = AimbotSettings.FOVColor
 local FOVCorner = Instance.new("UICorner", FOVFrame)
 FOVCorner.CornerRadius = UDim.new(1, 0)
 
--- Rainbow FOV animation
-local rainbowHue = 0
-local isRainbow = false
-
-RunService.RenderStepped:Connect(function()
-	local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
-	FOVFrame.Size = UDim2.new(0, AimbotSettings.FOVSize*2, 0, AimbotSettings.FOVSize*2)
-	FOVFrame.Position = UDim2.new(0, center.X, 0, center.Y)
-	FOVFrame.Visible = toggles.fovCircle
-
-	if isRainbow then
-		rainbowHue = (rainbowHue + 0.005) % 1
-		local col = Color3.fromHSV(rainbowHue, 1, 1)
-		FOVStroke.Color = col
-		AimbotSettings.FOVColor = col
-	else
-		FOVStroke.Color = AimbotSettings.FOVColor
-	end
-end)
+-- FOV color map
+local FOV_COLORS = {
+	["White"]    = Color3.fromRGB(255,255,255),
+	["Red"]      = Color3.fromRGB(255,50,50),
+	["Orange"]   = Color3.fromRGB(255,165,0),
+	["Yellow"]   = Color3.fromRGB(255,230,0),
+	["Lime"]     = Color3.fromRGB(80,255,80),
+	["Cyan"]     = Color3.fromRGB(0,220,255),
+	["Blue"]     = Color3.fromRGB(0,100,255),
+	["Purple"]   = Color3.fromRGB(160,0,255),
+	["Pink"]     = Color3.fromRGB(255,100,200),
+	["Hot Pink"] = Color3.fromRGB(255,20,147),
+}
 
 -- ══════════════════════════════════════
 -- AIMBOT LOGIC
@@ -363,14 +357,13 @@ local function isAimbotValid(p)
 	if toggles.teamCheck and player.Team and p.Team == player.Team then return false end
 	if toggles.wallCheck then
 		local hrp = getHRP(p.Character)
-		local target = p.Character:FindFirstChild(AimbotSettings.TargetPart)
-		if hrp and target then
+		if hrp then
 			local params = RaycastParams.new()
-			params.FilterDescendantsInstances = {player.Character, camera}
+			params.FilterDescendantsInstances = {player.Character}
 			params.FilterType = Enum.RaycastFilterType.Exclude
 			local result = workspace:Raycast(
 				camera.CFrame.Position,
-				target.Position - camera.CFrame.Position,
+				hrp.Position - camera.CFrame.Position,
 				params
 			)
 			if result and not result.Instance:IsDescendantOf(p.Character) then return false end
@@ -386,9 +379,9 @@ local function getAimbotTarget()
 
 	for _,p in pairs(Players:GetPlayers()) do
 		if p ~= player and isAimbotValid(p) then
-			local part = p.Character and p.Character:FindFirstChild(AimbotSettings.TargetPart)
-			if part then
-				local screenPos, onScreen = camera:WorldToViewportPoint(part.Position)
+			local hrp = getHRP(p.Character)
+			if hrp then
+				local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
 				if onScreen then
 					local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
 					if dist < closestDist then
@@ -403,6 +396,22 @@ local function getAimbotTarget()
 end
 
 RunService.RenderStepped:Connect(function()
+	-- FOV circle update
+	local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+	FOVFrame.Size = UDim2.new(0, AimbotSettings.FOVSize*2, 0, AimbotSettings.FOVSize*2)
+	FOVFrame.Position = UDim2.new(0, center.X, 0, center.Y)
+	FOVFrame.Visible = toggles.fovCircle
+
+	-- Rainbow
+	if isRainbow then
+		rainbowHue = (rainbowHue + 0.004) % 1
+		local col = Color3.fromHSV(rainbowHue, 1, 1)
+		FOVStroke.Color = col
+	else
+		FOVStroke.Color = AimbotSettings.FOVColor
+	end
+
+	-- Aimbot
 	if not toggles.aimbot then
 		AimbotSettings.CurrentTarget = nil
 		return
@@ -410,8 +419,8 @@ RunService.RenderStepped:Connect(function()
 
 	local target = AimbotSettings.CurrentTarget
 	if target then
-		local part = target.Character and target.Character:FindFirstChild(AimbotSettings.TargetPart)
-		if not part or not isAimbotValid(target) then
+		local hrp = getHRP(target.Character)
+		if not hrp or not isAimbotValid(target) then
 			AimbotSettings.CurrentTarget = nil
 			target = nil
 		end
@@ -423,17 +432,17 @@ RunService.RenderStepped:Connect(function()
 	end
 
 	if target then
-		local part = target.Character and target.Character:FindFirstChild(AimbotSettings.TargetPart)
-		if part then
-			local screenPos, onScreen = camera:WorldToViewportPoint(part.Position)
-			local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
-			local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+		local hrp = getHRP(target.Character)
+		if hrp then
+			local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
+			local centerV = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+			local dist = (Vector2.new(screenPos.X, screenPos.Y) - centerV).Magnitude
 			if not onScreen or dist > AimbotSettings.FOVSize * 1.5 then
 				AimbotSettings.CurrentTarget = nil
 				return
 			end
 			camera.CFrame = camera.CFrame:Lerp(
-				CFrame.new(camera.CFrame.Position, part.Position),
+				CFrame.new(camera.CFrame.Position, hrp.Position),
 				math.clamp(AimbotSettings.Smoothing, 0.01, 1)
 			)
 		end
@@ -453,7 +462,6 @@ local Window = Rayfield:CreateWindow({
 	KeySystem = false,
 })
 
--- Transparency (aggressive pass on all frames)
 local function applyTransparency()
 	local rf = player.PlayerGui:FindFirstChild("Rayfield")
 	if not rf then return end
@@ -469,11 +477,8 @@ local function applyTransparency()
 end
 
 task.spawn(function()
-	task.wait(1.5)
-	applyTransparency()
-	-- Second pass after animations settle
-	task.wait(1)
-	applyTransparency()
+	task.wait(1.5); applyTransparency()
+	task.wait(1);   applyTransparency()
 end)
 
 -- ══════════════════════════════════════
@@ -585,8 +590,8 @@ AimbotTab:CreateToggle({
 	Callback = function(V) toggles.fovCircle = V end
 })
 AimbotTab:CreateInput({
-	Name = "FOV Circle Size",
-	PlaceholderText = "Default: 150",
+	Name = "FOV Size",
+	PlaceholderText = "Default: 150  (10 - 800)",
 	RemoveTextAfterFocusLost = false,
 	Callback = function(V)
 		local num = tonumber(V)
@@ -599,25 +604,13 @@ AimbotTab:CreateDropdown({
 	Options = {"White","Red","Orange","Yellow","Lime","Cyan","Blue","Purple","Pink","Hot Pink","Rainbow"},
 	CurrentOption = {"White"},
 	MultipleOptions = false,
-	Callback = function(V)
-		isRainbow = false
-		local colors = {
-			["White"]    = Color3.fromRGB(255,255,255),
-			["Red"]      = Color3.fromRGB(255,50,50),
-			["Orange"]   = Color3.fromRGB(255,165,0),
-			["Yellow"]   = Color3.fromRGB(255,230,0),
-			["Lime"]     = Color3.fromRGB(80,255,80),
-			["Cyan"]     = Color3.fromRGB(0,220,255),
-			["Blue"]     = Color3.fromRGB(0,100,255),
-			["Purple"]   = Color3.fromRGB(160,0,255),
-			["Pink"]     = Color3.fromRGB(255,100,200),
-			["Hot Pink"] = Color3.fromRGB(255,20,147),
-			["Rainbow"]  = nil,
-		}
-		if V == "Rainbow" then
+	Callback = function(selected)
+		local option = type(selected) == "table" and selected[1] or selected
+		if option == "Rainbow" then
 			isRainbow = true
 		else
-			local col = colors[V]
+			isRainbow = false
+			local col = FOV_COLORS[option]
 			if col then
 				AimbotSettings.FOVColor = col
 				FOVStroke.Color = col
@@ -750,15 +743,22 @@ RunService.Heartbeat:Connect(function()
 	if toggles.antisit then hum.Sit=false end
 	if toggles.antistun then hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,false) end
 	if toggles.antifling then hrp.RotVelocity=Vector3.new(0,0,0) end
-	if toggles.untouchable then for _,v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanTouch=false end end
-	else for _,v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanTouch=true end end end
+	if toggles.untouchable then
+		for _,v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanTouch=false end end
+	else
+		for _,v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanTouch=true end end
+	end
 	if toggles.bringTarget and persistentTarget and persistentTarget.Character then
 		local th=getHRP(persistentTarget.Character); if th then th.CFrame=hrp.CFrame*CFrame.new(0,0,-3) end
 	end
 	if toggles.autoHide then
 		local hp=(hum.Health/math.max(hum.MaxHealth,1))*100
-		if hp<30 and not toggles.hide then autoHideReturnPos=hrp.CFrame; hrp.CFrame=spawnRoom()*CFrame.new(0,5,0); toggles.hide=true
-		elseif hp>=50 and toggles.hide and autoHideReturnPos then hrp.CFrame=autoHideReturnPos; autoHideReturnPos=nil; toggles.hide=false; if roomFolder then roomFolder:Destroy(); roomFolder=nil end end
+		if hp<30 and not toggles.hide then
+			autoHideReturnPos=hrp.CFrame; hrp.CFrame=spawnRoom()*CFrame.new(0,5,0); toggles.hide=true
+		elseif hp>=50 and toggles.hide and autoHideReturnPos then
+			hrp.CFrame=autoHideReturnPos; autoHideReturnPos=nil; toggles.hide=false
+			if roomFolder then roomFolder:Destroy(); roomFolder=nil end
+		end
 	end
 	for _,p in pairs(Players:GetPlayers()) do
 		if p~=player and p.Character then
