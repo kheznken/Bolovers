@@ -53,7 +53,7 @@ local espObjects = {}
 
 local AimbotSettings = {
 	FOVSize = 150,
-	Smoothing = 0.1,
+	Smoothing = 1, -- 100% = instant lock (no lerp delay)
 	FOVColor = Color3.fromRGB(255,255,255),
 	CurrentTarget = nil,
 }
@@ -97,6 +97,13 @@ local function getTeamColor(p)
 	end)
 	if ok and tc then return tc end
 	return Color3.fromRGB(255,255,255)
+end
+
+local function onSameTeam(p)
+	-- both must actually have a team assigned, and it must be the same team object
+	if not player.Team then return false end
+	if not p.Team then return false end
+	return player.Team == p.Team
 end
 
 local function spawnRoom()
@@ -348,23 +355,34 @@ local FOVCorner = Instance.new("UICorner", FOVFrame)
 FOVCorner.CornerRadius = UDim.new(1, 0)
 
 -- ══════════════════════════════════════
--- AIMBOT
+-- AIMBOT LOGIC
 -- ══════════════════════════════════════
 local function isAimbotValid(p)
 	if not p or not p.Character then return false end
+
+	-- Dead check
 	local hum = getHum(p.Character)
 	if toggles.deadCheck and hum and hum.Health <= 0 then return false end
-	if toggles.teamCheck and player.Team and p.Team == player.Team then return false end
+
+	-- Team check: skip if target is on same team as us
+	if toggles.teamCheck and onSameTeam(p) then return false end
+
+	-- Wall check
 	if toggles.wallCheck then
 		local hrp = getHRP(p.Character)
 		if hrp then
 			local params = RaycastParams.new()
 			params.FilterDescendantsInstances = {player.Character}
 			params.FilterType = Enum.RaycastFilterType.Exclude
-			local result = workspace:Raycast(camera.CFrame.Position, hrp.Position - camera.CFrame.Position, params)
-			if result and not result.Instance:IsDescendantOf(p.Character) then return false end
+			local origin = camera.CFrame.Position
+			local direction = hrp.Position - origin
+			local result = workspace:Raycast(origin, direction, params)
+			if result and not result.Instance:IsDescendantOf(p.Character) then
+				return false
+			end
 		end
 	end
+
 	return true
 end
 
@@ -378,7 +396,10 @@ local function getAimbotTarget()
 				local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
 				if onScreen then
 					local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
-					if dist < closestDist then closestDist=dist; closest=p end
+					if dist < closestDist then
+						closestDist = dist
+						closest = p
+					end
 				end
 			end
 		end
@@ -399,23 +420,40 @@ RunService.RenderStepped:Connect(function()
 		FOVStroke.Color = AimbotSettings.FOVColor
 	end
 
-	if not toggles.aimbot then AimbotSettings.CurrentTarget = nil; return end
+	if not toggles.aimbot then
+		AimbotSettings.CurrentTarget = nil
+		return
+	end
 
+	-- Validate existing target
 	local target = AimbotSettings.CurrentTarget
 	if target then
 		local hrp = getHRP(target.Character)
-		if not hrp or not isAimbotValid(target) then AimbotSettings.CurrentTarget = nil; target = nil end
+		if not hrp or not isAimbotValid(target) then
+			AimbotSettings.CurrentTarget = nil
+			target = nil
+		end
 	end
-	if not target then AimbotSettings.CurrentTarget = getAimbotTarget(); target = AimbotSettings.CurrentTarget end
+
+	-- Find new target if needed
+	if not target then
+		AimbotSettings.CurrentTarget = getAimbotTarget()
+		target = AimbotSettings.CurrentTarget
+	end
+
 	if target then
 		local hrp = getHRP(target.Character)
 		if hrp then
 			local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
-			local centerV = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
-			if not onScreen or (Vector2.new(screenPos.X, screenPos.Y) - centerV).Magnitude > AimbotSettings.FOVSize*1.5 then
-				AimbotSettings.CurrentTarget = nil; return
+			local dist2d = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+			if not onScreen or dist2d > AimbotSettings.FOVSize * 1.5 then
+				AimbotSettings.CurrentTarget = nil
+				return
 			end
-			camera.CFrame = camera.CFrame:Lerp(CFrame.new(camera.CFrame.Position, hrp.Position), math.clamp(AimbotSettings.Smoothing, 0.01, 1))
+			camera.CFrame = camera.CFrame:Lerp(
+				CFrame.new(camera.CFrame.Position, hrp.Position),
+				math.clamp(AimbotSettings.Smoothing, 0.01, 1)
+			)
 		end
 	end
 end)
@@ -541,27 +579,77 @@ end })
 -- AIMBOT TAB
 -- ══════════════════════════════════════
 AimbotTab:CreateSection("Aimbot")
-AimbotTab:CreateToggle({ Name="Enable Aimbot", CurrentValue=false, Callback=function(V) toggles.aimbot=V if not V then AimbotSettings.CurrentTarget=nil end end })
+AimbotTab:CreateToggle({
+	Name = "Enable Aimbot",
+	CurrentValue = false,
+	Callback = function(V)
+		toggles.aimbot = V
+		if not V then AimbotSettings.CurrentTarget = nil end
+	end
+})
 AimbotTab:CreateSection("FOV Circle")
-AimbotTab:CreateToggle({ Name="Enable FOV Circle", CurrentValue=false, Callback=function(V) toggles.fovCircle=V end })
-AimbotTab:CreateInput({ Name="FOV Size", PlaceholderText="Default: 150  (10 - 800)", RemoveTextAfterFocusLost=false, Callback=function(V) local n=tonumber(V) if n then AimbotSettings.FOVSize=math.clamp(n,10,800) end end })
+AimbotTab:CreateToggle({
+	Name = "Enable FOV Circle",
+	CurrentValue = false,
+	Callback = function(V) toggles.fovCircle = V end
+})
+AimbotTab:CreateInput({
+	Name = "FOV Size",
+	PlaceholderText = "Default: 150  (10 - 800)",
+	RemoveTextAfterFocusLost = false,
+	Callback = function(V)
+		local n = tonumber(V)
+		if n then AimbotSettings.FOVSize = math.clamp(n, 10, 800) end
+	end
+})
 AimbotTab:CreateSection("FOV Color")
 AimbotTab:CreateDropdown({
-	Name="FOV Circle Color",
-	Options={"White","Red","Orange","Yellow","Lime","Cyan","Blue","Purple","Pink","Hot Pink","Rainbow"},
-	CurrentOption={"White"}, MultipleOptions=false,
-	Callback=function(selected)
-		local option = type(selected)=="table" and selected[1] or selected
-		if option=="Rainbow" then isRainbow=true
-		else isRainbow=false; local col=FOV_COLORS[option] if col then AimbotSettings.FOVColor=col; FOVStroke.Color=col end end
+	Name = "FOV Circle Color",
+	Options = {"White","Red","Orange","Yellow","Lime","Cyan","Blue","Purple","Pink","Hot Pink","Rainbow"},
+	CurrentOption = {"White"},
+	MultipleOptions = false,
+	Callback = function(selected)
+		local option = type(selected) == "table" and selected[1] or selected
+		if option == "Rainbow" then
+			isRainbow = true
+		else
+			isRainbow = false
+			local col = FOV_COLORS[option]
+			if col then AimbotSettings.FOVColor = col; FOVStroke.Color = col end
+		end
 	end
 })
 AimbotTab:CreateSection("Checks")
-AimbotTab:CreateToggle({ Name="Wall Check", CurrentValue=false, Callback=function(V) toggles.wallCheck=V end })
-AimbotTab:CreateToggle({ Name="Team Check", CurrentValue=false, Callback=function(V) toggles.teamCheck=V end })
-AimbotTab:CreateToggle({ Name="Dead Check", CurrentValue=false, Callback=function(V) toggles.deadCheck=V end })
+AimbotTab:CreateToggle({
+	Name = "Wall Check",
+	CurrentValue = false,
+	Callback = function(V) toggles.wallCheck = V end
+})
+AimbotTab:CreateToggle({
+	Name = "Team Check",
+	CurrentValue = false,
+	Callback = function(V)
+		toggles.teamCheck = V
+		-- Reset target so it immediately re-evaluates
+		AimbotSettings.CurrentTarget = nil
+	end
+})
+AimbotTab:CreateToggle({
+	Name = "Dead Check",
+	CurrentValue = false,
+	Callback = function(V) toggles.deadCheck = V end
+})
 AimbotTab:CreateSection("Smoothing")
-AimbotTab:CreateSlider({ Name="Aim Smoothing", Range={1,100}, Increment=1, Suffix="%", CurrentValue=10, Callback=function(V) AimbotSettings.Smoothing=V/100 end })
+AimbotTab:CreateSlider({
+	Name = "Aim Smoothing",
+	Range = {1, 100},
+	Increment = 1,
+	Suffix = "%",
+	CurrentValue = 100, -- default 100% = instant
+	Callback = function(V)
+		AimbotSettings.Smoothing = V / 100
+	end
+})
 
 -- ══════════════════════════════════════
 -- ESP TAB
@@ -607,9 +695,7 @@ SavePosTab:CreateInput({
 	Name = "Position Name",
 	PlaceholderText = "Enter name...",
 	RemoveTextAfterFocusLost = false,
-	Callback = function(V)
-		posNameInput = V
-	end
+	Callback = function(V) posNameInput = V end
 })
 SavePosTab:CreateButton({
 	Name = "📍 Publish Position",
@@ -623,7 +709,6 @@ SavePosTab:CreateButton({
 		local cf = hrp.CFrame
 		table.insert(savedPositions, { name=name, cf=cf })
 
-		-- Dynamically create teleport button
 		SavePosTab:CreateButton({
 			Name = "🚀 "..name,
 			Callback = function()
