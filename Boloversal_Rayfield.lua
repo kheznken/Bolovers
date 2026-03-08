@@ -24,7 +24,6 @@ local customJump = 50
 local hitboxSize = 15
 local tpTool = nil
 local glideTool = nil
-local savedLocation = nil
 local playerPositions = {}
 local xrayParts = {}
 local targetPlayerName = ""
@@ -55,13 +54,28 @@ local espObjects = {}
 local AimbotSettings = {
 	FOVSize = 150,
 	Smoothing = 0.1,
-	TargetPart = "HumanoidRootPart",
-	FOVColor = Color3.fromRGB(255, 255, 255),
+	FOVColor = Color3.fromRGB(255,255,255),
 	CurrentTarget = nil,
 }
 
 local isRainbow = false
 local rainbowHue = 0
+
+local savedPositions = {}
+local posNameInput = ""
+
+local FOV_COLORS = {
+	["White"]    = Color3.fromRGB(255,255,255),
+	["Red"]      = Color3.fromRGB(255,50,50),
+	["Orange"]   = Color3.fromRGB(255,165,0),
+	["Yellow"]   = Color3.fromRGB(255,230,0),
+	["Lime"]     = Color3.fromRGB(80,255,80),
+	["Cyan"]     = Color3.fromRGB(0,220,255),
+	["Blue"]     = Color3.fromRGB(0,100,255),
+	["Purple"]   = Color3.fromRGB(160,0,255),
+	["Pink"]     = Color3.fromRGB(255,100,200),
+	["Hot Pink"] = Color3.fromRGB(255,20,147),
+}
 
 -- ══════════════════════════════════════
 -- HELPERS
@@ -310,7 +324,7 @@ for _,p in pairs(Players:GetPlayers()) do
 end
 
 -- ══════════════════════════════════════
--- FOV CIRCLE (standalone ScreenGui)
+-- FOV CIRCLE
 -- ══════════════════════════════════════
 local AimSG = Instance.new("ScreenGui")
 AimSG.Name = "BoloverAim"
@@ -333,22 +347,8 @@ FOVStroke.Color = AimbotSettings.FOVColor
 local FOVCorner = Instance.new("UICorner", FOVFrame)
 FOVCorner.CornerRadius = UDim.new(1, 0)
 
--- FOV color map
-local FOV_COLORS = {
-	["White"]    = Color3.fromRGB(255,255,255),
-	["Red"]      = Color3.fromRGB(255,50,50),
-	["Orange"]   = Color3.fromRGB(255,165,0),
-	["Yellow"]   = Color3.fromRGB(255,230,0),
-	["Lime"]     = Color3.fromRGB(80,255,80),
-	["Cyan"]     = Color3.fromRGB(0,220,255),
-	["Blue"]     = Color3.fromRGB(0,100,255),
-	["Purple"]   = Color3.fromRGB(160,0,255),
-	["Pink"]     = Color3.fromRGB(255,100,200),
-	["Hot Pink"] = Color3.fromRGB(255,20,147),
-}
-
 -- ══════════════════════════════════════
--- AIMBOT LOGIC
+-- AIMBOT
 -- ══════════════════════════════════════
 local function isAimbotValid(p)
 	if not p or not p.Character then return false end
@@ -361,11 +361,7 @@ local function isAimbotValid(p)
 			local params = RaycastParams.new()
 			params.FilterDescendantsInstances = {player.Character}
 			params.FilterType = Enum.RaycastFilterType.Exclude
-			local result = workspace:Raycast(
-				camera.CFrame.Position,
-				hrp.Position - camera.CFrame.Position,
-				params
-			)
+			local result = workspace:Raycast(camera.CFrame.Position, hrp.Position - camera.CFrame.Position, params)
 			if result and not result.Instance:IsDescendantOf(p.Character) then return false end
 		end
 	end
@@ -373,10 +369,8 @@ local function isAimbotValid(p)
 end
 
 local function getAimbotTarget()
-	local closest = nil
-	local closestDist = AimbotSettings.FOVSize
+	local closest, closestDist = nil, AimbotSettings.FOVSize
 	local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
-
 	for _,p in pairs(Players:GetPlayers()) do
 		if p ~= player and isAimbotValid(p) then
 			local hrp = getHRP(p.Character)
@@ -384,10 +378,7 @@ local function getAimbotTarget()
 				local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
 				if onScreen then
 					local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
-					if dist < closestDist then
-						closestDist = dist
-						closest = p
-					end
+					if dist < closestDist then closestDist=dist; closest=p end
 				end
 			end
 		end
@@ -396,55 +387,35 @@ local function getAimbotTarget()
 end
 
 RunService.RenderStepped:Connect(function()
-	-- FOV circle update
 	local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
 	FOVFrame.Size = UDim2.new(0, AimbotSettings.FOVSize*2, 0, AimbotSettings.FOVSize*2)
 	FOVFrame.Position = UDim2.new(0, center.X, 0, center.Y)
 	FOVFrame.Visible = toggles.fovCircle
 
-	-- Rainbow
 	if isRainbow then
 		rainbowHue = (rainbowHue + 0.004) % 1
-		local col = Color3.fromHSV(rainbowHue, 1, 1)
-		FOVStroke.Color = col
+		FOVStroke.Color = Color3.fromHSV(rainbowHue, 1, 1)
 	else
 		FOVStroke.Color = AimbotSettings.FOVColor
 	end
 
-	-- Aimbot
-	if not toggles.aimbot then
-		AimbotSettings.CurrentTarget = nil
-		return
-	end
+	if not toggles.aimbot then AimbotSettings.CurrentTarget = nil; return end
 
 	local target = AimbotSettings.CurrentTarget
 	if target then
 		local hrp = getHRP(target.Character)
-		if not hrp or not isAimbotValid(target) then
-			AimbotSettings.CurrentTarget = nil
-			target = nil
-		end
+		if not hrp or not isAimbotValid(target) then AimbotSettings.CurrentTarget = nil; target = nil end
 	end
-
-	if not target then
-		AimbotSettings.CurrentTarget = getAimbotTarget()
-		target = AimbotSettings.CurrentTarget
-	end
-
+	if not target then AimbotSettings.CurrentTarget = getAimbotTarget(); target = AimbotSettings.CurrentTarget end
 	if target then
 		local hrp = getHRP(target.Character)
 		if hrp then
 			local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
 			local centerV = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
-			local dist = (Vector2.new(screenPos.X, screenPos.Y) - centerV).Magnitude
-			if not onScreen or dist > AimbotSettings.FOVSize * 1.5 then
-				AimbotSettings.CurrentTarget = nil
-				return
+			if not onScreen or (Vector2.new(screenPos.X, screenPos.Y) - centerV).Magnitude > AimbotSettings.FOVSize*1.5 then
+				AimbotSettings.CurrentTarget = nil; return
 			end
-			camera.CFrame = camera.CFrame:Lerp(
-				CFrame.new(camera.CFrame.Position, hrp.Position),
-				math.clamp(AimbotSettings.Smoothing, 0.01, 1)
-			)
+			camera.CFrame = camera.CFrame:Lerp(CFrame.new(camera.CFrame.Position, hrp.Position), math.clamp(AimbotSettings.Smoothing, 0.01, 1))
 		end
 	end
 end)
@@ -467,32 +438,27 @@ local function applyTransparency()
 	if not rf then return end
 	for _,obj in ipairs(rf:GetDescendants()) do
 		if obj:IsA("Frame") or obj:IsA("ScrollingFrame") then
-			if obj.BackgroundTransparency < 0.75 then
-				obj.BackgroundTransparency = 0.75
-			end
+			if obj.BackgroundTransparency < 0.75 then obj.BackgroundTransparency = 0.75 end
 		elseif obj:IsA("CanvasGroup") then
 			obj.GroupTransparency = 0.75
 		end
 	end
 end
-
-task.spawn(function()
-	task.wait(1.5); applyTransparency()
-	task.wait(1);   applyTransparency()
-end)
+task.spawn(function() task.wait(1.5); applyTransparency(); task.wait(1); applyTransparency() end)
 
 -- ══════════════════════════════════════
 -- TABS
 -- ══════════════════════════════════════
-local MainTab     = Window:CreateTab("Main",     "zap")
-local CombatTab   = Window:CreateTab("Combat",   "sword")
-local TargetTab   = Window:CreateTab("Target",   "crosshair")
-local AimbotTab   = Window:CreateTab("Aimbot",   "target")
-local ESPTab      = Window:CreateTab("ESP",      "eye")
-local VisualsTab  = Window:CreateTab("Visuals",  "sun")
-local ItemTab     = Window:CreateTab("Items",    "package")
-local UtilityTab  = Window:CreateTab("Utility",  "wrench")
-local SettingsTab = Window:CreateTab("Settings", "settings")
+local MainTab     = Window:CreateTab("Main",          "zap")
+local CombatTab   = Window:CreateTab("Combat",        "sword")
+local TargetTab   = Window:CreateTab("Target",        "crosshair")
+local AimbotTab   = Window:CreateTab("Aimbot",        "target")
+local ESPTab      = Window:CreateTab("ESP",           "eye")
+local VisualsTab  = Window:CreateTab("Visuals",       "sun")
+local SavePosTab  = Window:CreateTab("Save Position", "map-pin")
+local ItemTab     = Window:CreateTab("Items",         "package")
+local UtilityTab  = Window:CreateTab("Utility",       "wrench")
+local SettingsTab = Window:CreateTab("Settings",      "settings")
 
 -- ══════════════════════════════════════
 -- MAIN
@@ -575,76 +541,27 @@ end })
 -- AIMBOT TAB
 -- ══════════════════════════════════════
 AimbotTab:CreateSection("Aimbot")
-AimbotTab:CreateToggle({
-	Name = "Enable Aimbot",
-	CurrentValue = false,
-	Callback = function(V)
-		toggles.aimbot = V
-		if not V then AimbotSettings.CurrentTarget = nil end
-	end
-})
+AimbotTab:CreateToggle({ Name="Enable Aimbot", CurrentValue=false, Callback=function(V) toggles.aimbot=V if not V then AimbotSettings.CurrentTarget=nil end end })
 AimbotTab:CreateSection("FOV Circle")
-AimbotTab:CreateToggle({
-	Name = "Enable FOV Circle",
-	CurrentValue = false,
-	Callback = function(V) toggles.fovCircle = V end
-})
-AimbotTab:CreateInput({
-	Name = "FOV Size",
-	PlaceholderText = "Default: 150  (10 - 800)",
-	RemoveTextAfterFocusLost = false,
-	Callback = function(V)
-		local num = tonumber(V)
-		if num then AimbotSettings.FOVSize = math.clamp(num, 10, 800) end
-	end
-})
+AimbotTab:CreateToggle({ Name="Enable FOV Circle", CurrentValue=false, Callback=function(V) toggles.fovCircle=V end })
+AimbotTab:CreateInput({ Name="FOV Size", PlaceholderText="Default: 150  (10 - 800)", RemoveTextAfterFocusLost=false, Callback=function(V) local n=tonumber(V) if n then AimbotSettings.FOVSize=math.clamp(n,10,800) end end })
 AimbotTab:CreateSection("FOV Color")
 AimbotTab:CreateDropdown({
-	Name = "FOV Circle Color",
-	Options = {"White","Red","Orange","Yellow","Lime","Cyan","Blue","Purple","Pink","Hot Pink","Rainbow"},
-	CurrentOption = {"White"},
-	MultipleOptions = false,
-	Callback = function(selected)
-		local option = type(selected) == "table" and selected[1] or selected
-		if option == "Rainbow" then
-			isRainbow = true
-		else
-			isRainbow = false
-			local col = FOV_COLORS[option]
-			if col then
-				AimbotSettings.FOVColor = col
-				FOVStroke.Color = col
-			end
-		end
+	Name="FOV Circle Color",
+	Options={"White","Red","Orange","Yellow","Lime","Cyan","Blue","Purple","Pink","Hot Pink","Rainbow"},
+	CurrentOption={"White"}, MultipleOptions=false,
+	Callback=function(selected)
+		local option = type(selected)=="table" and selected[1] or selected
+		if option=="Rainbow" then isRainbow=true
+		else isRainbow=false; local col=FOV_COLORS[option] if col then AimbotSettings.FOVColor=col; FOVStroke.Color=col end end
 	end
 })
 AimbotTab:CreateSection("Checks")
-AimbotTab:CreateToggle({
-	Name = "Wall Check",
-	CurrentValue = false,
-	Callback = function(V) toggles.wallCheck = V end
-})
-AimbotTab:CreateToggle({
-	Name = "Team Check",
-	CurrentValue = false,
-	Callback = function(V) toggles.teamCheck = V end
-})
-AimbotTab:CreateToggle({
-	Name = "Dead Check",
-	CurrentValue = false,
-	Callback = function(V) toggles.deadCheck = V end
-})
+AimbotTab:CreateToggle({ Name="Wall Check", CurrentValue=false, Callback=function(V) toggles.wallCheck=V end })
+AimbotTab:CreateToggle({ Name="Team Check", CurrentValue=false, Callback=function(V) toggles.teamCheck=V end })
+AimbotTab:CreateToggle({ Name="Dead Check", CurrentValue=false, Callback=function(V) toggles.deadCheck=V end })
 AimbotTab:CreateSection("Smoothing")
-AimbotTab:CreateSlider({
-	Name = "Aim Smoothing",
-	Range = {1, 100},
-	Increment = 1,
-	Suffix = "%",
-	CurrentValue = 10,
-	Callback = function(V)
-		AimbotSettings.Smoothing = V / 100
-	end
-})
+AimbotTab:CreateSlider({ Name="Aim Smoothing", Range={1,100}, Increment=1, Suffix="%", CurrentValue=10, Callback=function(V) AimbotSettings.Smoothing=V/100 end })
 
 -- ══════════════════════════════════════
 -- ESP TAB
@@ -680,9 +597,49 @@ VisualsTab:CreateToggle({ Name="Night Mode", CurrentValue=false, Callback=functi
 	if V then Lighting.ClockTime=0; Lighting.Brightness=0.2
 	else Lighting.ClockTime=origLight.ClockTime; Lighting.Brightness=origLight.Brightness end
 end })
-VisualsTab:CreateToggle({ Name="No Fog", CurrentValue=false, Callback=function(V)
-	Lighting.FogEnd = V and 1e6 or origLight.FogEnd
-end })
+VisualsTab:CreateToggle({ Name="No Fog", CurrentValue=false, Callback=function(V) Lighting.FogEnd = V and 1e6 or origLight.FogEnd end })
+
+-- ══════════════════════════════════════
+-- SAVE POSITION TAB
+-- ══════════════════════════════════════
+SavePosTab:CreateSection("Save a Position")
+SavePosTab:CreateInput({
+	Name = "Position Name",
+	PlaceholderText = "Enter name...",
+	RemoveTextAfterFocusLost = false,
+	Callback = function(V)
+		posNameInput = V
+	end
+})
+SavePosTab:CreateButton({
+	Name = "📍 Publish Position",
+	Callback = function()
+		local hrp = getHRP(player.Character)
+		if not hrp then
+			Rayfield:Notify({ Title="Error", Content="Character not found!", Duration=3 })
+			return
+		end
+		local name = posNameInput ~= "" and posNameInput or ("Position "..tostring(#savedPositions+1))
+		local cf = hrp.CFrame
+		table.insert(savedPositions, { name=name, cf=cf })
+
+		-- Dynamically create teleport button
+		SavePosTab:CreateButton({
+			Name = "🚀 "..name,
+			Callback = function()
+				local hrp2 = getHRP(player.Character)
+				if hrp2 then
+					hrp2.CFrame = cf
+					Rayfield:Notify({ Title="Teleported", Content="Went to: "..name, Duration=2 })
+				end
+			end
+		})
+
+		Rayfield:Notify({ Title="Saved!", Content=name.." has been saved.", Duration=3 })
+		posNameInput = ""
+	end
+})
+SavePosTab:CreateSection("Saved Positions")
 
 -- ══════════════════════════════════════
 -- ITEMS
@@ -710,10 +667,8 @@ UtilityTab:CreateToggle({ Name="Hide Room", CurrentValue=false, Callback=functio
 	else if roomFolder then roomFolder:Destroy(); roomFolder=nil end; if preCloudPos then hrp.CFrame=preCloudPos end end
 end })
 UtilityTab:CreateToggle({ Name="Auto Hide (< 30% HP)", CurrentValue=false, Callback=function(V) toggles.autoHide=V end })
-UtilityTab:CreateSection("Teleport")
+UtilityTab:CreateSection("Misc")
 UtilityTab:CreateToggle({ Name="Instant Interact", CurrentValue=false, Callback=function(V) toggles.instantInteract=V end })
-UtilityTab:CreateButton({ Name="Save Position", Callback=function() local hrp=getHRP(player.Character) if hrp then savedLocation=hrp.CFrame end end })
-UtilityTab:CreateButton({ Name="Teleport to Saved", Callback=function() if savedLocation then local hrp=getHRP(player.Character) if hrp then hrp.CFrame=savedLocation end end end })
 
 -- ══════════════════════════════════════
 -- SETTINGS
